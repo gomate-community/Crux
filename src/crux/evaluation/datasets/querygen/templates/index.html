@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>arXiv QueryGen - 智能论文检索问题生成器</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- 页面初始加载遮罩：在第一次接口返回前处于阻塞动画状态 -->
+    <div id="initial-loader">
+        <div class="global-spinner"></div>
+        <h2 style="color: #2c3e50;">程序刚启动：正在将海量 Parquet 数据载入内存...</h2>
+        <p style="color: #7f8c8d;">可能需要数十秒，请耐心等待（后续抽取将瞬间完成）⏳</p>
+    </div>
+
+    <div id="queue-status">
+        <div id="queue-header">📊 队列等待数: 0</div>
+        <ul id="queue-list"></ul>
+    </div>
+    <div class="container">
+        <h1>📚 arXiv QueryGen</h1>
+        <p style="text-align: center; color: #7f8c8d; margin-top: -10px; margin-bottom: 25px;">学术检索 RAG 测试集自动化构建工具</p>
+        
+        <!-- 模式切换开关 -->
+        <div class="mode-toggle">
+            <div class="toggle-bg" id="modeToggleBg" onclick="toggleMode()">
+                <div class="toggle-slider"></div>
+                <div class="toggle-option opt-manual">⌨️ 手动模式</div>
+                <div class="toggle-option opt-auto">💻 自动模式</div>
+            </div>
+        </div>
+
+        <!-- 自动模式区域 -->
+        <div id="auto-mode-section" style="display: none;">
+            <div class="card" style="background: #fffdf5; border-color: #f1c40f;">
+                <h2 style="color: #f39c12; margin-top:0; margin-bottom: 20px;">💻 全自动探索与生成流水线</h2>
+                
+                <!-- 控制面板 -->
+                <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 20px; align-items: center;">
+                    <div>
+                        <span class="label" style="display: inline; margin-right: 5px; margin-top:0;">生成目标数量:</span>
+                        <input type="number" id="autoTargetCount" value="50" style="padding: 5px; width: 80px; text-align: center; border: 1px solid #ccc; border-radius: 4px;">
+                    </div>
+                    <div>
+                        <span class="label" style="display: inline; margin-right: 5px; margin-top:0;">最大尝试倍率:</span>
+                        <input type="number" id="autoMaxMultiplier" value="2" step="0.5" style="padding: 5px; width: 60px; text-align: center; border: 1px solid #ccc; border-radius: 4px;" title="尝试次数超过 [目标数量 × 该倍率] 时报错停止，例: 目标50, 倍率2, 则最多尝试100次">
+                    </div>
+                    <div>
+                        <span class="label" style="display: inline; margin-right: 5px; margin-top:0;">API错误最大重试:</span>
+                        <input type="number" id="autoMaxRetries" value="3" style="padding: 5px; width: 60px; text-align: center; border: 1px solid #ccc; border-radius: 4px;" title="遇到请求失败、超时等错误时的最大重试次数">
+                    </div>
+                    <div style="flex-grow: 1;">
+                        <span style="font-size: 12px; color: #7f8c8d; font-style: italic;">(流水线并行模式开发中，当前为串行安全模式)</span>
+                    </div>
+                    <button id="autoStartBtn" onclick="startAutoMode()" style="background-color: #27ae60; padding: 10px 25px; font-weight: bold;">▶ 开始生成</button>
+                    <button id="autoStopBtn" onclick="stopAutoMode()" style="background-color: #e74c3c; padding: 10px 25px; font-weight: bold; display: none;">⏹ 停止并结算</button>
+                </div>
+
+                <!-- 状态与进度 -->
+                <div style="margin-bottom: 20px; padding: 15px; background: #fff; border: 1px solid #eee; border-radius: 8px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; color: #34495e;">
+                        <span><strong>成功生成:</strong> <span id="autoProgressText">0</span> / <span id="autoTargetText">50</span></span>
+                        <span><strong>总尝试抽样:</strong> <span id="autoAttemptsText">0</span></span>
+                        <span><strong>丢弃/不适用:</strong> <span id="autoDiscardText">0</span> (<span id="autoFilterRate">0%</span>)</span>
+                    </div>
+                    <div style="width: 100%; height: 16px; background-color: #ecf0f1; border-radius: 8px; overflow: hidden; border: 1px solid #bdc3c7;">
+                        <div id="autoProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #2ecc71, #27ae60); transition: width 0.3s ease-in-out;"></div>
+                    </div>
+                </div>
+
+                <!-- 实时终端日志 -->
+                <div class="label" style="margin-top:0px;">实时运行终端:</div>
+                <div id="autoConsole" style="background: #1e1e1e; color: #2ecc71; font-family: 'Courier New', Courier, monospace; font-size: 13px; padding: 12px; border-radius: 6px; height: 180px; overflow-y: auto; box-shadow: inset 0 0 10px rgba(0,0,0,0.8); line-height: 1.6;">
+                    > 系统已就绪，等待启动参数...<br>
+                </div>
+            </div>
+        </div>
+
+        <!-- 手动模式区域 (之前的全部内容) -->
+        <div id="manual-mode-section">
+            <div class="btn-container">
+                <div id="loading">正在加载数据...</div>
+            <button onclick="fetchRandomRecord()">🎲 随机挑选一个</button>
+            <button id="evalBtn" onclick="evaluatePaper()" style="background-color: #8e44ad; margin-left: 15px;">🔍 自动评估适用性</button>
+            <button id="autoGenTopBtn" onclick="autoGenerateAndSave()" style="background-color: #27ae60; margin-left: 15px;">💻 自动生成并存入CSV</button>
+        </div>
+
+        <div id="result" class="card" style="display:none;">
+            <div class="label">标题:</div>
+            <div id="title" class="content" style="font-size: 1.2em; font-weight: bold;"></div>
+            
+            <div class="label">ID / 分类 / 日期:</div>
+            <div class="content"><span id="id"></span> | <span id="categories" style="color: #e67e22;"></span> | <span id="update_date" style="color: #27ae60; font-weight: bold;"></span></div>
+            
+            <div id="publish_info_container" style="display:none;">
+                <div class="label">发表于 (Journal Ref / DOI):</div>
+                <div id="publish_info" class="content" style="color: #c0392b; font-weight: bold;"></div>
+            </div>
+
+            <div class="label">作者:</div>
+            <div id="authors" class="content"></div>
+            
+            <div class="label">摘要:</div>
+            <div id="abstract" class="abstract"></div>
+
+            <div class="label">版本记录:</div>
+            <div id="versions" class="content" style="font-size: 0.85em; color: #666;"></div>
+        </div>
+
+        <div id="eval_result_container" class="card" style="display:none; margin-top:20px; border-left: 4px solid #3498db; background: #f0f8ff;">
+            <div class="label" style="margin-top:0; color: #2c3e50;">🤖 AI 适用性评估结果:</div>
+            <div id="eval_result" class="content" style="margin-top: 10px; line-height: 1.6;"></div>
+        </div>
+
+        <div class="card" style="margin-top: 40px; border-top: 3px solid #333;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <span class="label" style="margin: 0;">📋 纯文本模式 (包含提示词)</span>
+                <div>
+                    <button onclick="copyPlainText()" style="padding: 5px 10px; font-size: 12px; background-color: #7f8c8d; color: white; border: none; border-radius: 4px; cursor: pointer;">一键复制</button>
+                </div>
+            </div>
+            <textarea id="plain_text_area" readonly style="width: 100%; height: 200px; padding: 10px; border: 1px dashed #ccc; border-radius: 4px; font-family: monospace; font-size: 14px; background-color: #fafafa;"></textarea>
+        </div>
+        </div> <!-- end #manual-mode-section -->
+    </div>
+    
+    <div id="toast"></div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
